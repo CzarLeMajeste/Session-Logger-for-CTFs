@@ -185,8 +185,8 @@ def read_terminal_history(max_lines: int) -> str:
         Path('~/.local/state/bash/history').expanduser(),     # XDG-style bash history
         Path('~/.bash_history').expanduser(),                 # bash default
         Path('~/.zsh_history').expanduser(),                  # zsh default
-        Path('~/.local/share/fish/fish_history').expanduser(),  # fish default
-        Path('~/.config/fish/fish_history').expanduser(),       # fish alternate
+        Path('~/.local/share/fish/fish_history').expanduser(),  # fish standard
+        Path('~/.config/fish/fish_history').expanduser(),       # fish legacy
     ])
 
     history_path = next((p for p in candidates if p.is_file()), None)
