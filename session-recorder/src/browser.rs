@@ -81,8 +81,9 @@ fn read_chromium(db: &PathBuf, since_ts: i64, limit: usize) -> Vec<String> {
              WHERE last_visit_time > ?1 \
              ORDER BY last_visit_time DESC LIMIT ?2",
         )?;
-        stmt.query_map([chrome_since, limit as i64], |r| r.get(0))?
-            .collect()
+        let rows: rusqlite::Result<Vec<String>> =
+            stmt.query_map([chrome_since, limit as i64], |r| r.get(0))?.collect();
+        rows
     })();
     let _ = fs::remove_file(&tmp);
     result.unwrap_or_default()
@@ -105,8 +106,9 @@ fn read_firefox(db: &PathBuf, since_ts: i64, limit: usize) -> Vec<String> {
              WHERE v.visit_date > ?1 \
              ORDER BY v.visit_date DESC LIMIT ?2",
         )?;
-        stmt.query_map([ff_since, limit as i64], |r| r.get(0))?
-            .collect()
+        let rows: rusqlite::Result<Vec<String>> =
+            stmt.query_map([ff_since, limit as i64], |r| r.get(0))?.collect();
+        rows
     })();
     let _ = fs::remove_file(&tmp);
     result.unwrap_or_default()
