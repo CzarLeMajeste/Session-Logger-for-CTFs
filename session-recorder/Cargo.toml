@@ -1,0 +1,50 @@
+[package]
+name = "session-recorder"
+version = "1.0.0"
+edition = "2021"
+description = "Privacy-first background session recorder for CTF sessions"
+license = "MIT"
+authors = ["Session Logger contributors"]
+repository = "https://github.com/CzarLeMajeste/Session-Logger-for-CTFs"
+homepage = "https://github.com/CzarLeMajeste/Session-Logger-for-CTFs"
+keywords = ["ctf", "security", "session", "recorder", "pentest"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "session-recorder"
+path = "src/main.rs"
+
+[dependencies]
+clap      = { version = "4.5", features = ["derive"] }
+serde     = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono    = { version = "0.4", features = ["serde"] }
+dirs      = "5.0"
+regex     = "1.10"
+rusqlite  = { version = "0.31", features = ["bundled"] }
+ctrlc     = { version = "3.4",  features = ["termination"] }
+
+# ── Packaging metadata ────────────────────────────────────────────────────────
+
+# cargo-deb: https://github.com/kornelski/cargo-deb
+[package.metadata.deb]
+maintainer = "Session Logger contributors"
+copyright  = "2024, MIT"
+license-file = ["../LICENSE", "4"]
+extended-description = """\
+Privacy-first background session recorder for CTF sessions.
+Records active window titles, clipboard changes, and browser URLs locally.
+Exports recordings to structured Markdown notes compatible with Obsidian.\
+"""
+depends   = "$auto"
+section   = "utils"
+priority  = "optional"
+assets    = [
+  ["target/release/session-recorder", "usr/bin/", "755"],
+]
+
+# cargo-generate-rpm: https://github.com/cat-in-136/cargo-generate-rpm
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/session-recorder", dest = "/usr/bin/session-recorder", mode = "0755" },
+]
