@@ -19,6 +19,10 @@ Options
     --history           Auto-read the current shell history and convert it
     --history-lines N   Number of recent history lines to ingest (default: 500)
     --output-dir DIR    Root directory for notes (default: notes/)
+    --session           Read from the session-recorder JSONL log for --date
+    --session-dir DIR   Session data directory (default: platform app-data path)
+    --include-urls      Include browser URLs when reading a session JSONL file
+    --images FILE ...   One or more image files to attach to the note
     --help, -h          Show this help message
 
 Examples
@@ -37,16 +41,109 @@ Examples
 
     # Auto-ingest your terminal session history
     python dump2note.py --history --history-lines 300
+
+    # Convert today's session-recorder log into a note (includes timeline)
+    python dump2note.py --session
+
+    # Convert a specific date's session log, including browser URLs
+    python dump2note.py --session --date 2026-04-20 --include-urls
+
+    # Use a custom session data directory
+    python dump2note.py --session --session-dir /mnt/logs/sessions --date 2026-04-20
+
+    # Attach screenshots to the note (copied into notes/<tool>/<YYYY>/assets/)
+    python dump2note.py session.log --tool nmap --images recon.png port-scan.png
+
+    # Preview a note with attached images (no files are copied)
+    python dump2note.py session.log --tool nmap --images recon.png --preview
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import platform as _platform
 import re
+import shutil
 import sys
 from datetime import date as _date
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Session-recorder integration helpers
+# ---------------------------------------------------------------------------
+
+def _default_session_dir() -> Path:
+    """Return the platform-appropriate session-logger data directory.
+
+    Mirrors the path chosen by the Rust session-recorder binary:
+      Linux   – $XDG_DATA_HOME/session-logger/sessions  (~/.local/share/…)
+      macOS   – ~/Library/Application Support/session-logger/sessions
+      Windows – %LOCALAPPDATA%/session-logger/sessions
+    """
+    system = _platform.system()
+    if system == 'Windows':
+        base = Path(os.environ.get('LOCALAPPDATA', '~')).expanduser()
+    elif system == 'Darwin':
+        base = Path('~/Library/Application Support').expanduser()
+    else:
+        xdg = os.environ.get('XDG_DATA_HOME', '')
+        base = Path(xdg).expanduser() if xdg else Path('~/.local/share').expanduser()
+    return base / 'session-logger' / 'sessions'
+
+
+def read_session_jsonl(
+    path: Path,
+    include_urls: bool = False,
+) -> tuple[str, list[str]]:
+    """Read a session-recorder JSONL file and prepare it for the note pipeline.
+
+    Returns
+    -------
+    text : str
+        A plain-text representation of the session events suitable for
+        ``normalize_lines`` / ``classify_lines`` (mirrors the Rust
+        ``events_to_text`` function in ``notes.rs``).
+    timeline : list[str]
+        Human-readable window-focus entries (timestamped) for the optional
+        **Session Timeline** section of the generated note.
+    """
+    text_lines: list[str] = []
+    timeline: list[str] = []
+
+    for raw_line in path.read_text(errors='replace').splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        try:
+            ev = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+
+        event_type = ev.get('type', '')
+        data = ev.get('data', '').strip()
+        ts = ev.get('ts', '')
+        app = ev.get('app', '')
+
+        if event_type == 'window':
+            text_lines.append(f'# Window: {data}')
+            label = f'[{ts}] {app}: {data}' if app else f'[{ts}] {data}'
+            timeline.append(label)
+        elif event_type == 'clipboard':
+            if '\n' in data:
+                text_lines.append(f'# Clipboard:\n{data}')
+            elif data:
+                text_lines.append(data)
+        elif event_type == 'browser_url' and include_urls:
+            text_lines.append(f'# URL: {data}')
+        elif event_type == 'command':
+            text_lines.append(f'$ {data}')
+        elif event_type == 'system':
+            text_lines.append(f'# [{data}]')
+
+    return '\n'.join(text_lines), timeline
+
 
 # ---------------------------------------------------------------------------
 # Tool auto-detection – ordered from most specific to least specific
@@ -273,13 +370,52 @@ def _fmt_task_list(items: list[str], fallback: str = 'None captured.') -> str:
     return '\n'.join(f'- [ ] {item}' for item in items)
 
 
-def build_note(tool: str, date_str: str, buckets: dict[str, list[str]]) -> str:
+# Recognised image extensions (lower-case).
+_SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset({
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp',
+})
+
+
+def _copy_images(image_paths: list[Path], assets_dir: Path) -> list[str]:
+    """Copy *image_paths* into *assets_dir* and return relative Markdown image tags.
+
+    * *assets_dir* is created if it does not exist.
+    * Files that already have the same name in *assets_dir* are overwritten so
+      that repeated ``--append`` runs keep the assets folder in sync.
+    * Returns a list of Markdown ``![name](assets/name)`` strings, one per image.
+    """
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_refs: list[str] = []
+    for src in image_paths:
+        dest = assets_dir / src.name
+        shutil.copy2(src, dest)
+        # Use a POSIX-style relative path so the link works on all platforms
+        rel = dest.relative_to(assets_dir.parent).as_posix()
+        md_refs.append(f'![{src.stem}]({rel})')
+    return md_refs
+
+
+def build_note(
+    tool: str,
+    date_str: str,
+    buckets: dict[str, list[str]],
+    timeline: list[str] | None = None,
+    images: list[str] | None = None,
+) -> str:
     """Render a complete Obsidian-friendly Markdown note from classified buckets."""
     summary = build_summary(buckets)
 
     raw_section = ''
     if buckets['raw']:
         raw_section = '\n\n## Raw Notes\n\n' + _fmt_list(buckets['raw'])
+
+    timeline_section = ''
+    if timeline:
+        timeline_section = '\n\n## Session Timeline\n\n' + _fmt_list(timeline)
+
+    screenshots_section = ''
+    if images:
+        screenshots_section = '\n\n## Screenshots\n\n' + '\n\n'.join(images)
 
     return (
         f'---\n'
@@ -300,7 +436,9 @@ def build_note(tool: str, date_str: str, buckets: dict[str, list[str]]) -> str:
         f'{_fmt_list(buckets["findings"])}\n\n'
         f'## Follow-ups\n\n'
         f'{_fmt_task_list(buckets["followups"])}'
-        f'{raw_section}\n'
+        f'{raw_section}'
+        f'{timeline_section}'
+        f'{screenshots_section}\n'
     )
 
 # ---------------------------------------------------------------------------
@@ -352,6 +490,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             '  python dump2note.py nmap.txt --tool nmap --date 2026-04-17\n'
             '  cat log.txt | python dump2note.py --tool sqlmap  # pipe input\n'
             '  python dump2note.py --history --history-lines 300 # auto history mode\n'
+            '  python dump2note.py --session                    # today\'s session log\n'
+            '  python dump2note.py --session --date 2026-04-20 --include-urls\n'
+            '  python dump2note.py session.log --images recon.png port-scan.png\n'
         ),
     )
     p.add_argument('dump_file', nargs='?', help='Path to raw dump file (default: stdin)')
@@ -369,6 +510,24 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help='How many recent history lines to ingest with --history (default: 500)')
     p.add_argument('--output-dir', dest='output_dir', default='notes',
                    help='Root directory for notes (default: notes/)')
+    p.add_argument('--session', action='store_true',
+                   help=(
+                       'Read from the session-recorder JSONL log for --date '
+                       '(or today). Looks in --session-dir / <YYYY> / <date>.jsonl.'
+                   ))
+    p.add_argument('--session-dir', dest='session_dir', default=None,
+                   help=(
+                       f'Session data directory '
+                       f'(default: {_default_session_dir()})'
+                   ))
+    p.add_argument('--include-urls', dest='include_urls', action='store_true',
+                   help='Include browser URLs when reading a session JSONL file')
+    p.add_argument('--images', nargs='+', metavar='FILE', default=[],
+                   help=(
+                       'One or more image files to attach to the note. '
+                       'Images are copied into notes/<tool>/<YYYY>/assets/ '
+                       'and embedded as Markdown image links in a Screenshots section.'
+                   ))
     return p.parse_args(argv)
 
 # ---------------------------------------------------------------------------
@@ -377,15 +536,61 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    if args.dump_file and args.history:
-        print('ERROR: Use either DUMP_FILE or --history, not both.', file=sys.stderr)
+
+    # Validate mutually exclusive input modes
+    input_modes = sum([bool(args.dump_file), args.history, args.session])
+    if input_modes > 1:
+        print('ERROR: Use at most one of DUMP_FILE, --history, or --session.', file=sys.stderr)
         return 1
     if args.history and args.history_lines <= 0:
         print('ERROR: --history-lines must be greater than 0.', file=sys.stderr)
         return 1
+    if args.include_urls and not args.session:
+        print('ERROR: --include-urls is only valid with --session.', file=sys.stderr)
+        return 1
+
+    # Validate image paths up-front (before any heavy work)
+    image_paths: list[Path] = []
+    for img_str in args.images:
+        img_path = Path(img_str)
+        if not img_path.exists():
+            print(f'ERROR: Image file not found: {img_path}', file=sys.stderr)
+            return 1
+        if img_path.suffix.lower() not in _SUPPORTED_IMAGE_EXTS:
+            print(
+                f'WARNING: "{img_path.name}" has an unrecognised extension '
+                f'({img_path.suffix}); embedding anyway.',
+                file=sys.stderr,
+            )
+        image_paths.append(img_path)
+
+    timeline: list[str] = []  # populated when reading a session JSONL file
 
     # 1. Read raw input -------------------------------------------------------
-    if args.history:
+    if args.session:
+        session_dir = Path(args.session_dir) if args.session_dir else _default_session_dir()
+        date_for_lookup = args.date or _date.today().isoformat()
+        try:
+            parsed = _date.fromisoformat(date_for_lookup)
+        except ValueError:
+            print(
+                f'ERROR: Invalid date format "{date_for_lookup}". '
+                'Use YYYY-MM-DD.',
+                file=sys.stderr,
+            )
+            return 1
+        year = str(parsed.year)
+        session_path = session_dir / year / f'{date_for_lookup}.jsonl'
+        if not session_path.exists():
+            print(f'ERROR: Session file not found: {session_path}', file=sys.stderr)
+            print('  Hint: start recording with: session-recorder start', file=sys.stderr)
+            return 1
+        try:
+            raw_text, timeline = read_session_jsonl(session_path, include_urls=args.include_urls)
+        except OSError as exc:
+            print(f'ERROR: Could not read session file: {exc}', file=sys.stderr)
+            return 1
+    elif args.history:
         try:
             raw_text = read_terminal_history(args.history_lines)
         except FileNotFoundError as exc:
@@ -412,14 +617,19 @@ def main(argv: list[str] | None = None) -> int:
     detected_tool = args.tool or detect_tool(raw_text)
     detected_date = args.date or detect_date(raw_text)
 
-    interactive = (sys.stdin.isatty() and not args.history) or bool(args.dump_file)
+    # Session and history modes are non-interactive by design
+    interactive = (
+        not args.session
+        and not args.history
+        and (sys.stdin.isatty() or bool(args.dump_file))
+    )
     if interactive:
         tool = args.tool or prompt_tool(detected_tool)
         date_str = args.date or prompt_date(detected_date)
     else:
-        # Non-interactive (piped) – use detected values or sensible defaults
-        tool = detected_tool or 'unknown'
-        date_str = detected_date or _date.today().isoformat()
+        # Non-interactive (session/history/piped) – use detected values or sensible defaults
+        tool = detected_tool or ('session' if args.session else 'unknown')
+        date_str = detected_date or (args.date or _date.today().isoformat())
 
     # Sanitize tool name for use in file path
     tool_slug = re.sub(r'[^\w.-]', '-', tool).lower().strip('-')
@@ -429,10 +639,18 @@ def main(argv: list[str] | None = None) -> int:
     buckets = classify_lines(normalized, do_redact=not args.no_redact)
 
     # 4. Build note ------------------------------------------------------------
-    note_content = build_note(tool_slug, date_str, buckets)
+    note_content = build_note(tool_slug, date_str, buckets, timeline=timeline)
 
     # 5. Preview mode ----------------------------------------------------------
     if args.preview:
+        # In preview mode show placeholder links instead of copying files
+        if image_paths:
+            preview_refs = [f'![{p.stem}](assets/{p.name})' for p in image_paths]
+            note_content = build_note(
+                tool_slug, date_str, buckets,
+                timeline=timeline,
+                images=preview_refs,
+            )
         print(note_content)
         return 0
 
@@ -441,6 +659,21 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.output_dir) / tool_slug / year
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f'{date_str}.md'
+
+    # 6a. Copy images into assets/ and build Markdown refs ----------------------
+    md_image_refs: list[str] = []
+    if image_paths:
+        assets_dir = out_dir / 'assets'
+        md_image_refs = _copy_images(image_paths, assets_dir)
+        for src in image_paths:
+            print(f'Image attached: {assets_dir / src.name}')
+
+    # 7. Build final note with real image refs ----------------------------------
+    note_content = build_note(
+        tool_slug, date_str, buckets,
+        timeline=timeline,
+        images=md_image_refs,
+    )
 
     # 7. Write / append --------------------------------------------------------
     if out_file.exists() and not args.append:
