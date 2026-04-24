@@ -69,6 +69,12 @@ python dump2note.py --session --date 2026-04-20 --include-urls
 
 # Use a custom session data directory
 python dump2note.py --session --session-dir /mnt/logs/sessions --date 2026-04-20
+
+# Attach screenshots – copied to notes/<tool>/<YYYY>/assets/ and embedded in the note
+python dump2note.py session.log --tool nmap --images recon.png port-scan.png
+
+# Preview a note with attached images (no files are copied)
+python dump2note.py session.log --tool nmap --images recon.png --preview
 ```
 
 ### What it does
@@ -80,7 +86,7 @@ python dump2note.py --session --session-dir /mnt/logs/sessions --date 2026-04-20
 | **Normalize** | Deduplicates repeated lines and collapses blank-line runs |
 | **Classify** | Sorts lines into *Commands / Steps*, *Findings*, *Follow-ups*, and *Raw Notes* |
 | **Redact** | Removes passwords, API tokens, JWTs, and AWS keys from the output (disable with `--no-redact`) |
-| **Format** | Produces Obsidian-friendly Markdown with YAML frontmatter, task-style follow-ups, and an optional **Session Timeline** section |
+| **Format** | Produces Obsidian-friendly Markdown with YAML frontmatter, task-style follow-ups, an optional **Session Timeline** section, and an optional **Screenshots** section |
 | **Write** | Creates `notes/<tool>/<YYYY>/<YYYY-MM-DD>.md` (merges or appends if the file already exists) |
 
 ### Options
@@ -103,6 +109,7 @@ options:
   --session             Read from the session-recorder JSONL log for --date (or today)
   --session-dir DIR     Session data directory (default: platform app-data path)
   --include-urls        Include browser URLs when reading a session JSONL file
+  --images FILE ...     Image files to attach (copied to notes/<tool>/<YYYY>/assets/)
   -h, --help            Show this help message
 ```
 

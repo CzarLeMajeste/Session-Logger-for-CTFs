@@ -22,6 +22,7 @@ Options
     --session           Read from the session-recorder JSONL log for --date
     --session-dir DIR   Session data directory (default: platform app-data path)
     --include-urls      Include browser URLs when reading a session JSONL file
+    --images FILE ...   One or more image files to attach to the note
     --help, -h          Show this help message
 
 Examples
@@ -49,6 +50,12 @@ Examples
 
     # Use a custom session data directory
     python dump2note.py --session --session-dir /mnt/logs/sessions --date 2026-04-20
+
+    # Attach screenshots to the note (copied into notes/<tool>/<YYYY>/assets/)
+    python dump2note.py session.log --tool nmap --images recon.png port-scan.png
+
+    # Preview a note with attached images (no files are copied)
+    python dump2note.py session.log --tool nmap --images recon.png --preview
 """
 
 from __future__ import annotations
@@ -58,6 +65,7 @@ import json
 import os
 import platform as _platform
 import re
+import shutil
 import sys
 from datetime import date as _date
 from pathlib import Path
@@ -362,11 +370,37 @@ def _fmt_task_list(items: list[str], fallback: str = 'None captured.') -> str:
     return '\n'.join(f'- [ ] {item}' for item in items)
 
 
+# Recognised image extensions (lower-case).
+_SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset({
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp',
+})
+
+
+def _copy_images(image_paths: list[Path], assets_dir: Path) -> list[str]:
+    """Copy *image_paths* into *assets_dir* and return relative Markdown image tags.
+
+    * *assets_dir* is created if it does not exist.
+    * Files that already have the same name in *assets_dir* are overwritten so
+      that repeated ``--append`` runs keep the assets folder in sync.
+    * Returns a list of Markdown ``![name](assets/name)`` strings, one per image.
+    """
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_refs: list[str] = []
+    for src in image_paths:
+        dest = assets_dir / src.name
+        shutil.copy2(src, dest)
+        # Use a POSIX-style relative path so the link works on all platforms
+        rel = dest.relative_to(assets_dir.parent).as_posix()
+        md_refs.append(f'![{src.stem}]({rel})')
+    return md_refs
+
+
 def build_note(
     tool: str,
     date_str: str,
     buckets: dict[str, list[str]],
     timeline: list[str] | None = None,
+    images: list[str] | None = None,
 ) -> str:
     """Render a complete Obsidian-friendly Markdown note from classified buckets."""
     summary = build_summary(buckets)
@@ -378,6 +412,10 @@ def build_note(
     timeline_section = ''
     if timeline:
         timeline_section = '\n\n## Session Timeline\n\n' + _fmt_list(timeline)
+
+    screenshots_section = ''
+    if images:
+        screenshots_section = '\n\n## Screenshots\n\n' + '\n\n'.join(images)
 
     return (
         f'---\n'
@@ -399,7 +437,8 @@ def build_note(
         f'## Follow-ups\n\n'
         f'{_fmt_task_list(buckets["followups"])}'
         f'{raw_section}'
-        f'{timeline_section}\n'
+        f'{timeline_section}'
+        f'{screenshots_section}\n'
     )
 
 # ---------------------------------------------------------------------------
@@ -453,6 +492,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             '  python dump2note.py --history --history-lines 300 # auto history mode\n'
             '  python dump2note.py --session                    # today\'s session log\n'
             '  python dump2note.py --session --date 2026-04-20 --include-urls\n'
+            '  python dump2note.py session.log --images recon.png port-scan.png\n'
         ),
     )
     p.add_argument('dump_file', nargs='?', help='Path to raw dump file (default: stdin)')
@@ -482,6 +522,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    ))
     p.add_argument('--include-urls', dest='include_urls', action='store_true',
                    help='Include browser URLs when reading a session JSONL file')
+    p.add_argument('--images', nargs='+', metavar='FILE', default=[],
+                   help=(
+                       'One or more image files to attach to the note. '
+                       'Images are copied into notes/<tool>/<YYYY>/assets/ '
+                       'and embedded as Markdown image links in a Screenshots section.'
+                   ))
     return p.parse_args(argv)
 
 # ---------------------------------------------------------------------------
@@ -502,6 +548,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.include_urls and not args.session:
         print('ERROR: --include-urls is only valid with --session.', file=sys.stderr)
         return 1
+
+    # Validate image paths up-front (before any heavy work)
+    image_paths: list[Path] = []
+    for img_str in args.images:
+        img_path = Path(img_str)
+        if not img_path.exists():
+            print(f'ERROR: Image file not found: {img_path}', file=sys.stderr)
+            return 1
+        if img_path.suffix.lower() not in _SUPPORTED_IMAGE_EXTS:
+            print(
+                f'WARNING: "{img_path.name}" has an unrecognised extension '
+                f'({img_path.suffix}); embedding anyway.',
+                file=sys.stderr,
+            )
+        image_paths.append(img_path)
 
     timeline: list[str] = []  # populated when reading a session JSONL file
 
@@ -573,6 +634,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # 5. Preview mode ----------------------------------------------------------
     if args.preview:
+        # In preview mode show placeholder links instead of copying files
+        if image_paths:
+            preview_refs = [f'![{p.stem}](assets/{p.name})' for p in image_paths]
+            note_content = build_note(
+                tool_slug, date_str, buckets,
+                timeline=timeline or None,
+                images=preview_refs,
+            )
         print(note_content)
         return 0
 
@@ -581,6 +650,21 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = Path(args.output_dir) / tool_slug / year
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f'{date_str}.md'
+
+    # 6a. Copy images into assets/ and build Markdown refs ----------------------
+    md_image_refs: list[str] = []
+    if image_paths:
+        assets_dir = out_dir / 'assets'
+        md_image_refs = _copy_images(image_paths, assets_dir)
+        for src in image_paths:
+            print(f'Image attached: {assets_dir / src.name}')
+
+    # 7. Build final note with real image refs ----------------------------------
+    note_content = build_note(
+        tool_slug, date_str, buckets,
+        timeline=timeline or None,
+        images=md_image_refs or None,
+    )
 
     # 7. Write / append --------------------------------------------------------
     if out_file.exists() and not args.append:
