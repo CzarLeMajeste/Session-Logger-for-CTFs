@@ -1,6 +1,6 @@
 # Session Logger
 
-This repo contains  my session logger.
+This repo contains my session logger.
 
 ## Notes structure
 
@@ -327,3 +327,32 @@ Options forwarded to dump2note.py:
 
 > **Windows users:** Run the script inside [Git Bash](https://git-scm.com/downloads)
 > or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+---
+
+## Desktop GUI
+
+`gui.py` is a minimal desktop front-end for the session logger. It wraps
+`session-recorder` and `dump2note.py` in a single window so you can control
+everything without typing CLI commands.
+
+### Requirements
+
+- Python 3.10+ with **tkinter** (included in most standard Python distributions)
+- `session-recorder` binary built or on `PATH` (needed for the recorder panel)
+
+### Quick start
+
+```bash
+python gui.py
+```
+
+### Panels
+
+| Panel | What it does |
+|-------|-------------|
+| **Session Recorder** | Displays recorder status; buttons to Start, Start as Daemon, Stop, Pause, and Resume; export form with date and optional URL inclusion |
+| **Dump → Note** | File picker, tool/date fields, flags (Preview, Append, No-Redact, History), configurable output directory, history-line count; runs `dump2note.py` |
+| **Publish** | Platform and lab name fields, No-Push and Skip-Confirm flags; runs `publish-lab-notes.sh` to commit and push notes to GitHub |
+
+An **Output** console at the bottom of the window streams live stdout/stderr from every command.
