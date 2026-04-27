@@ -1,6 +1,6 @@
 # Session Logger
 
-This repo contains  my session logger.
+This repo contains my session logger.
 
 ## Notes structure
 
@@ -133,6 +133,36 @@ python dump2note.py examples/multi-tool.txt --preview
 
 Use the Rust CLI in `session-recorder/` to capture desktop session context
 and export it into structured notes.
+
+### Download a pre-built binary
+
+Pre-built binaries are published automatically on every tagged release via
+the included GitHub Actions workflow:
+
+| Platform | Asset |
+|----------|-------|
+| **Windows 10/11** (x86_64) | `session-recorder-<tag>-windows-x86_64.exe` |
+| **macOS** (Intel + Apple Silicon universal) | `session-recorder-<tag>-macos-universal` |
+| **Linux** (x86_64 Debian/Ubuntu) | `session-recorder-<tag>-x86_64.deb` |
+| **Linux** (x86_64 RPM-based distros) | `session-recorder-<tag>-x86_64.rpm` |
+
+Download the latest release from the
+[Releases page](https://github.com/CzarLeMajeste/Session-Logger-for-CTFs/releases/latest)
+and place the binary somewhere on your `PATH` (or run it directly from the
+download location).
+
+```bash
+# Linux – install the .deb package
+sudo dpkg -i session-recorder-v1.0.0-x86_64.deb
+
+# Linux – run the downloaded binary directly (no install)
+chmod +x session-recorder-v1.0.0-macos-universal
+./session-recorder-v1.0.0-macos-universal --help
+
+# macOS – allow the unsigned binary (one-time)
+xattr -dr com.apple.quarantine session-recorder-v1.0.0-macos-universal
+./session-recorder-v1.0.0-macos-universal --help
+```
 
 ### Build / run
 
@@ -327,3 +357,32 @@ Options forwarded to dump2note.py:
 
 > **Windows users:** Run the script inside [Git Bash](https://git-scm.com/downloads)
 > or [WSL](https://learn.microsoft.com/en-us/windows/wsl/install).
+
+---
+
+## Desktop GUI
+
+`gui.py` is a minimal desktop front-end for the session logger. It wraps
+`session-recorder` and `dump2note.py` in a single window so you can control
+everything without typing CLI commands.
+
+### Requirements
+
+- Python 3.10+ with **tkinter** (included in most standard Python distributions)
+- `session-recorder` binary built or on `PATH` (needed for the recorder panel)
+
+### Quick start
+
+```bash
+python gui.py
+```
+
+### Panels
+
+| Panel | What it does |
+|-------|-------------|
+| **Session Recorder** | Displays recorder status; buttons to Start, Start as Daemon, Stop, Pause, and Resume; export form with date and optional URL inclusion |
+| **Dump → Note** | File picker, tool/date fields, flags (Preview, Append, No-Redact, History), configurable output directory, history-line count; runs `dump2note.py` |
+| **Publish** | Platform and lab name fields, No-Push and Skip-Confirm flags; runs `publish-lab-notes.sh` to commit and push notes to GitHub |
+
+An **Output** console at the bottom of the window streams live stdout/stderr from every command.
