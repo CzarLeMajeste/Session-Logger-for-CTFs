@@ -231,10 +231,35 @@ jobs:
           name: gui-macos-arm64
           path: dist/ctf-session-logger-gui
 
+  # ── Python wheel / sdist ──────────────────────────────────────────────────
+  python-package:
+    name: Build Python package (wheel + sdist)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Upload Python dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
   # ── GitHub Release (tag pushes only) ─────────────────────────────────────
   release:
     name: Publish GitHub Release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, python-package]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -281,3 +306,5 @@ jobs:
             artifacts/ctf-session-logger-gui-*-windows-x86_64.exe
             artifacts/ctf-session-logger-gui-*-macos-arm64
             artifacts/ctf-session-logger-gui-*-linux-x86_64
+            artifacts/python-dist/*.whl
+            artifacts/python-dist/*.tar.gz
