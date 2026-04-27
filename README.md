@@ -134,6 +134,36 @@ python dump2note.py examples/multi-tool.txt --preview
 Use the Rust CLI in `session-recorder/` to capture desktop session context
 and export it into structured notes.
 
+### Download a pre-built binary
+
+Pre-built binaries are published automatically on every tagged release via
+the included GitHub Actions workflow:
+
+| Platform | Asset |
+|----------|-------|
+| **Windows 10/11** (x86_64) | `session-recorder-<tag>-windows-x86_64.exe` |
+| **macOS** (Intel + Apple Silicon universal) | `session-recorder-<tag>-macos-universal` |
+| **Linux** (x86_64 Debian/Ubuntu) | `session-recorder-<tag>-x86_64.deb` |
+| **Linux** (x86_64 RPM-based distros) | `session-recorder-<tag>-x86_64.rpm` |
+
+Download the latest release from the
+[Releases page](https://github.com/CzarLeMajeste/Session-Logger-for-CTFs/releases/latest)
+and place the binary somewhere on your `PATH` (or run it directly from the
+download location).
+
+```bash
+# Linux – install the .deb package
+sudo dpkg -i session-recorder-v1.0.0-x86_64.deb
+
+# Linux – run the downloaded binary directly (no install)
+chmod +x session-recorder-v1.0.0-macos-universal
+./session-recorder-v1.0.0-macos-universal --help
+
+# macOS – allow the unsigned binary (one-time)
+xattr -dr com.apple.quarantine session-recorder-v1.0.0-macos-universal
+./session-recorder-v1.0.0-macos-universal --help
+```
+
 ### Build / run
 
 ```bash
