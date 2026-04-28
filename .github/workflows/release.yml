@@ -1,8 +1,9 @@
 # release.yml – Cross-platform build and release workflow.
 #
 # Triggers:
-#   • Push of a version tag (e.g. v1.0.0) → full build + GitHub Release
-#   • Manual dispatch from the Actions tab  → build only (no release step)
+#   • Push of a version tag (e.g. v1.0.0)     → full build + GitHub Release
+#   • Manual dispatch with a 'version' input   → full build + GitHub Release
+#   • Manual dispatch without 'version' input  → build only (no release step)
 #
 # Produces:
 #   session-recorder CLI (Rust):
@@ -15,6 +16,10 @@
 #   • Windows 10/11  (x86_64)  →  ctf-session-logger-gui.exe
 #   • macOS (arm64)            →  ctf-session-logger-gui
 #   • Linux  (x86_64)          →  ctf-session-logger-gui
+#
+#   Python package:
+#   • Pure-Python wheel (py3-none-any)  →  ctf_session_logger-*.whl
+#   • Source distribution               →  ctf_session_logger-*.tar.gz
 
 name: Release
 
@@ -23,6 +28,17 @@ on:
     tags:
       - "v[0-9]*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: >
+          Version tag to create and release (e.g. v0.1.0-alpha).
+          Leave empty to run a build-only smoke test without publishing.
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -231,12 +247,39 @@ jobs:
           name: gui-macos-arm64
           path: dist/ctf-session-logger-gui
 
-  # ── GitHub Release (tag pushes only) ─────────────────────────────────────
+  # ── Python wheel / sdist ──────────────────────────────────────────────────
+  python-package:
+    name: Build Python package (wheel + sdist)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Upload Python dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  # ── GitHub Release (tag pushes OR manual dispatch with version) ──────────
   release:
     name: Publish GitHub Release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, python-package]
     runs-on: ubuntu-22.04
-    if: startsWith(github.ref, 'refs/tags/')
+    if: >
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && inputs.version != '')
 
     steps:
       - name: Download all artifacts
@@ -244,9 +287,26 @@ jobs:
         with:
           path: artifacts
 
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "name=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            echo "name=${TAG}" >> "$GITHUB_OUTPUT"
+            # Tags containing a hyphen (e.g. v1.0.0-alpha) are pre-releases
+            if [[ "${TAG}" == *-* ]]; then
+              echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Rename artifacts for release
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${{ steps.tag.outputs.name }}"
           mv artifacts/windows-x86_64/session-recorder.exe \
              artifacts/session-recorder-${TAG}-windows-x86_64.exe
           mv artifacts/macos-universal/session-recorder \
@@ -270,8 +330,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ steps.tag.outputs.prerelease }}
           generate_release_notes: true
           files: |
             artifacts/session-recorder-*-windows-x86_64.exe
@@ -281,3 +342,5 @@ jobs:
             artifacts/ctf-session-logger-gui-*-windows-x86_64.exe
             artifacts/ctf-session-logger-gui-*-macos-arm64
             artifacts/ctf-session-logger-gui-*-linux-x86_64
+            artifacts/python-dist/*.whl
+            artifacts/python-dist/*.tar.gz
